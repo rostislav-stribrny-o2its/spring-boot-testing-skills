@@ -22,10 +22,12 @@ The backend of the base is a stateless OAuth2 resource server (see the `oauth2-r
 **Opereta rows** (application roles, principal `personal_number`; see the `oauth2-resource-server` skill) — add them to every access matrix:
 
 - token without the entry role → `403` everywhere;
-- entry role, person **not paired** → `/api/me/status` `200`, every other endpoint `403`, and an audit record;
+- entry role, person **not paired** → `/api/me` `403` `application/problem+json`, `type` `/problems/no-access`, `reason: UNPAIRED`; every other endpoint `403`; an audit record;
+- paired person → `/api/me` `200` with `user.id` (number), `personalNumber`, `roles`, `permissions`;
+- person **suspended** → `/api/me` and **any other** endpoint `403` `/problems/no-access` with `reason: SUSPENDED` (not a generic access-denied problem);
 - paired person without the required business role → `403`; with it → `200`;
 - role removed in the database → `403` after the cache period, without a new token;
-- token without `personal_number` → `401`;
+- token without `personal_number` → `401`; invalid or expired token → `401` with `WWW-Authenticate: Bearer error="invalid_token"` and an empty body;
 - role administration: changing one's own roles → rejected; an administrator changing another administrator's roles → rejected; every accepted change audited;
 - the converter itself is tested against the Testcontainers database (see [tokens-and-reactive.md](tokens-and-reactive.md)); `jwt()` in MockMvc tests gets the authorities that converter would produce.
 
