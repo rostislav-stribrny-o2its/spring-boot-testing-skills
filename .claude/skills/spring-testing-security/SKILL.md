@@ -9,19 +9,29 @@ Spring Security test support (`org.springframework.boot:spring-boot-starter-secu
 
 For OAuth2 / OIDC login, JWT resource servers or WebFlux, also read [tokens-and-reactive.md](tokens-and-reactive.md).
 
+## Elysium Java base: a stateless resource server
+
+The backend of the base is a stateless OAuth2 resource server (see the `oauth2-resource-server` skill): bearer JWTs from an external identity provider, no login form, no `UserDetailsService`, no session and CSRF disabled. For such an app:
+
+- Anonymous requests get **`401`**, never a redirect to a login page.
+- Fake the caller with `jwt()` (bearer token) — see [tokens-and-reactive.md](tokens-and-reactive.md). `@WithMockUser` is fine for method-security tests on services.
+- `jwt()` **bypasses the app's converter**. If authorities come from the application database (application-roles model), test the converter bean itself against the database (see **Unit-testing security components** and the tokens file), and give `jwt()` the authorities that converter would produce.
+- Include the rows the app's own rules add: a valid token for a person **unknown to the application** must reach nothing but the explicit status endpoint; a role removed in the database must stop working without a new token (after the cache period).
+- Sections below about form login, `@WithUserDetails`, login pages, OIDC login and HTML output escaping apply to server-rendered apps and to frontends, not to the base backend.
+
 ## Steps
 
 1. **List the rules.** Read the `SecurityFilterChain` and the `@PreAuthorize` / `@Secured` annotations. Write down each protected resource and who may reach it.
 2. **Write the access matrix.** For each rule, plan one test per row:
-   - **anonymous**: no user at all. Expect a `302` redirect to the login page with form login, or `401` for HTTP Basic or a resource server.
+   - **anonymous**: no user at all. Expect `401` for a resource server (the base) or HTTP Basic, or a `302` redirect to the login page with form login.
    - **authenticated, missing authority**. Expect `403`, or `AccessDeniedException` from a service.
    - **authorized**. Expect success, and assert on the content too.
    - **each authentication mechanism the app supports** (form login, OIDC, …) when roles are derived differently per mechanism.
 3. **Pick the fake user** for each test from the table below.
-4. **Handle CSRF** on `POST`/`PUT`/`PATCH`/`DELETE` (see **CSRF**).
+4. **Handle CSRF** on `POST`/`PUT`/`PATCH`/`DELETE` when the app uses cookies (see **CSRF**); a stateless bearer-token API (the base) has CSRF disabled.
 5. **Unit-test the security components** (user services, authority mapping, principal types) without Spring.
 
-Done when every rule from step 1 has its anonymous, forbidden and authorized rows, and every unsafe request either carries a CSRF token or deliberately tests its absence.
+Done when every rule from step 1 has its anonymous, forbidden and authorized rows, and — in a cookie-based app — every unsafe request either carries a CSRF token or deliberately tests its absence.
 
 ## Choosing the fake user
 
@@ -77,6 +87,8 @@ var response = mvc.get().uri("/api/me")
 For a reusable annotation that builds such a principal, write a custom annotation meta-annotated with `@WithSecurityContext(factory = …)`.
 
 ## CSRF
+
+A stateless API that authenticates only with bearer tokens disables CSRF (the base does); there, assert once that an unsafe request with a valid token and no CSRF token succeeds. The rest of this section is for cookie-based apps.
 
 With CSRF protection on (the default), an unsafe request without a token gets `403`, even for an admin. That 403 is easy to misread as an authorization failure.
 
@@ -164,3 +176,11 @@ User services, principal types and authority mapping are plain classes: construc
   var user = new DemoOidcUserService().loadUser(new OidcUserRequest(registration, accessToken, idToken));
   ```
 - **Probe the edges of every mapping rule**: missing claim, look-alike values (`jane@other.admin.example.com` must not become admin when only `admin.example.com` grants it), case differences.
+
+## Provenance
+
+Modified for the Elysium Java base (stateless OAuth2 resource server, Spring Security 7) — this file has been changed from the original.
+Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
+`skills/spring-testing-security`, Apache License 2.0 (see the repository `LICENSE`); original content by Daniel Garnier-Moiroux,
+distilled from the book *Spring Boot Testing In Action*.
+Changes: section for a stateless resource server (401, `jwt()`, converter with application roles), CSRF and access-matrix rows adjusted.

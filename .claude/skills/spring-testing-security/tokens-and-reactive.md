@@ -34,6 +34,7 @@ mvc.post().uri("/api/city")
 ## Resource server (bearer tokens)
 
 - JWT: `.with(jwt().jwt(j -> j.subject("alice").claim("scope", "read")).authorities(new SimpleGrantedAuthority("SCOPE_read")))`. Like `oidcLogin()`, this bypasses the app's `JwtAuthenticationConverter`. Test the converter directly on a `Jwt` built with `Jwt.withTokenValue("t").header("alg", "none").claim(...).build()`.
+- **Converter with application roles** (roles loaded from the database): the converter is a bean that needs the repository, so test it in the suite's shared context against the Testcontainers database. Insert the person and their roles, build a `Jwt` with the configured principal claim, call `converter.convert(jwt)` and assert the authorities. Cover: unknown person (no business authority), person with roles, role removed (gone after the cache period), claim missing or blank (rejected).
 - Opaque tokens: `.with(opaqueToken().attributes(a -> a.put("sub", "alice")).authorities(...))`.
 - No token at all → `401`; token without the required scope or authority → `403`.
 
@@ -51,3 +52,8 @@ client.mutateWith(mockUser("alice").roles("ADMIN"))
 
 - Equivalents: `mockUser()`, `mockAuthentication(auth)`, `mockOidcLogin()`, `mockOAuth2Login()`, `mockJwt()`, `mockOpaqueToken()`, `csrf()`.
 - Reactive method security (`@PreAuthorize` on methods returning `Mono` / `Flux`) can be tested by calling the bean under `@WithMockUser` and verifying with `StepVerifier`. Expect the `AccessDeniedException` as an error signal, not a thrown exception.
+
+---
+
+Modified for the Elysium Java base — this file has been changed from the original (added: converter with application roles).
+Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills), `skills/spring-testing-security/tokens-and-reactive.md`, Apache License 2.0.
