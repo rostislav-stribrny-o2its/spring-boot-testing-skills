@@ -19,6 +19,16 @@ The backend of the base is a stateless OAuth2 resource server (see the `oauth2-r
 - Include the rows the app's own rules add: a valid token for a person **unknown to the application** must reach nothing but the explicit status endpoint; a role removed in the database must stop working without a new token (after the cache period).
 - Sections below about form login, `@WithUserDetails`, login pages, OIDC login and HTML output escaping apply to server-rendered apps and to frontends, not to the base backend.
 
+**Opereta rows** (application roles, principal `personal_number`; see the `oauth2-resource-server` skill) — add them to every access matrix:
+
+- token without the entry role → `403` everywhere;
+- entry role, person **not paired** → `/api/me/status` `200`, every other endpoint `403`, and an audit record;
+- paired person without the required business role → `403`; with it → `200`;
+- role removed in the database → `403` after the cache period, without a new token;
+- token without `personal_number` → `401`;
+- role administration: changing one's own roles → rejected; an administrator changing another administrator's roles → rejected; every accepted change audited;
+- the converter itself is tested against the Testcontainers database (see [tokens-and-reactive.md](tokens-and-reactive.md)); `jwt()` in MockMvc tests gets the authorities that converter would produce.
+
 ## Steps
 
 1. **List the rules.** Read the `SecurityFilterChain` and the `@PreAuthorize` / `@Secured` annotations. Write down each protected resource and who may reach it.
@@ -184,3 +194,4 @@ Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring
 `skills/spring-testing-security`, Apache License 2.0 (see the repository `LICENSE`); original content by Daniel Garnier-Moiroux,
 distilled from the book *Spring Boot Testing In Action*.
 Changes: section for a stateless resource server (401, `jwt()`, converter with application roles), CSRF and access-matrix rows adjusted.
+Opereta layer: access-matrix rows for paired accounts and role administration.
