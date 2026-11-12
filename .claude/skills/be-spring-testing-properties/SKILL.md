@@ -1,5 +1,5 @@
 ---
-name: spring-testing-properties
+name: be-spring-testing-properties
 description: Test Spring Boot configuration - @ConfigurationProperties binding and defaults, Bean Validation constraints on properties, and apps that must refuse to start on invalid config. Use when adding or changing configuration properties, their validation, or startup checks such as InitializingBean on configuration.
 ---
 
@@ -18,7 +18,7 @@ Pick the cheapest technique that covers the stage you are testing:
 | Binding, defaults, post-init checks, the app refusing to start | `SpringApplicationBuilder` with a minimal context | tens of ms per test, no cache |
 | The app behaving correctly under a given configuration | `@SpringBootTest` with properties | a cached context per configuration |
 
-Every distinct property set in `@SpringBootTest` is a separate cached context (load `spring-testing-fast`). Keep annotated tests to a default configuration plus at most one "custom" configuration that sets every value you want to check. Test all other variations with the first three techniques.
+Every distinct property set in `@SpringBootTest` is a separate cached context (load `be-spring-testing-fast`). Keep annotated tests to a default configuration plus at most one "custom" configuration that sets every value you want to check. Test all other variations with the first three techniques.
 
 ## Steps
 

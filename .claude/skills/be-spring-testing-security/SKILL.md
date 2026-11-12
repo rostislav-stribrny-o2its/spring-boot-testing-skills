@@ -1,17 +1,17 @@
 ---
-name: spring-testing-security
+name: be-spring-testing-security
 description: Test Spring Security in Spring Boot apps - fake users (@WithMockUser, @WithUserDetails, user(), authentication(), oidcLogin(), jwt()), CSRF, URL and method authorization rules, custom principals, login pages, and security components such as UserDetailsService or OidcUserService. Use when a test calls secured endpoints or services, or when testing who may access what.
 ---
 
 # Testing application security
 
-Spring Security test support (`org.springframework.boot:spring-boot-starter-security-test`, test scope) fakes an authenticated user by populating the `SecurityContext`. Load `spring-testing-web` alongside it for HTTP tests, and `spring-testing-browser` for login flows.
+Spring Security test support (`org.springframework.boot:spring-boot-starter-security-test`, test scope) fakes an authenticated user by populating the `SecurityContext`. Load `be-spring-testing-web` alongside it for HTTP tests, and `spring-testing-browser` for login flows.
 
 For OAuth2 / OIDC login, JWT resource servers or WebFlux, also read [tokens-and-reactive.md](tokens-and-reactive.md).
 
 ## Elysium Java base: a stateless resource server
 
-The backend of the base is a stateless OAuth2 resource server (see the `oauth2-resource-server` skill): bearer JWTs from an external identity provider, no login form, no `UserDetailsService`, no session and CSRF disabled. For such an app:
+The backend of the base is a stateless OAuth2 resource server (see the `be-oauth2-resource-server` skill): bearer JWTs from an external identity provider, no login form, no `UserDetailsService`, no session and CSRF disabled. For such an app:
 
 - Anonymous requests get **`401`**, never a redirect to a login page.
 - Fake the caller with `jwt()` (bearer token) — see [tokens-and-reactive.md](tokens-and-reactive.md). `@WithMockUser` is fine for method-security tests on services.
@@ -105,7 +105,7 @@ A stateless API that authenticates only with bearer tokens disables CSRF (the ba
 With CSRF protection on (the default), an unsafe request without a token gets `403`, even for an admin. That 403 is easy to misread as an authorization failure.
 
 - **Per request**: `.with(csrf())`.
-- **For every request of a context**: register a `MockMvcBuilderCustomizer` in a `@TestConfiguration`. Put it in the suite's shared configuration, since a one-off `@TestConfiguration` costs a new context (load `spring-testing-fast`).
+- **For every request of a context**: register a `MockMvcBuilderCustomizer` in a `@TestConfiguration`. Put it in the suite's shared configuration, since a one-off `@TestConfiguration` costs a new context (load `be-spring-testing-fast`).
   ```java
   @Bean
   MockMvcBuilderCustomizer defaultCsrf() {

@@ -1,5 +1,5 @@
 ---
-name: spring-testing-http-client
+name: be-spring-testing-http-client
 description: Test outbound HTTP client code in Spring Boot apps - RestClient, HTTP interface clients (@HttpExchange), RestTemplate - with MockRestServiceServer, @RestClientTest, or a stub HTTP server. Use when testing code that calls a third-party or remote API: the request it sends, how it maps responses, error statuses, retries, timeouts.
 ---
 
@@ -7,7 +7,7 @@ description: Test outbound HTTP client code in Spring Boot apps - RestClient, HT
 
 Two different things get tested:
 
-- **Code that uses the client** (services, controllers): stub the client bean with `@MockitoBean` in the app's regular tests (load `spring-testing-web`).
+- **Code that uses the client** (services, controllers): stub the client bean with `@MockitoBean` in the app's regular tests (load `be-spring-testing-web`).
 - **The client itself**: does it send the right request, map the response, and handle errors? That is this skill.
 
 Keep the client thin: one class per remote API that turns method calls into HTTP requests and responses into domain objects. App tests then mock that one class, and the tests below cover it.
@@ -80,7 +80,7 @@ class WeatherClientTests {
 - **List the components explicitly**: slice filtering reads class metadata and can't discover which beans take a builder.
 - **Build from the injected builder.** A component that calls `RestClient.create()` itself bypasses the mock server and makes real calls.
 - Provide the component's other dependencies (a properties object, a clock) with `@Import` or `@MockitoBean`.
-- Load `spring-testing-strategy` before adding many of these: each distinct `components = …` is one more cached context.
+- Load `be-spring-testing-strategy` before adding many of these: each distinct `components = …` is one more cached context.
 
 ## Expectations and responses
 
@@ -109,5 +109,5 @@ var api = HttpServiceProxyFactory.builderFor(RestClientAdapter.create(builder.bu
 Use one when the behaviour lives in the HTTP stack: timeouts, connection resets, streaming, or a reactive `WebClient`.
 
 - Start the server once for the suite, and reset its stubs in `@BeforeEach`.
-- Point the client at it with a `DynamicPropertyRegistrar` bean in the suite's shared test configuration: `registry -> registry.add("weather.base-url", server::baseUrl)`. A `@DynamicPropertySource` method in each test class is part of that class's cache key, so every class gets its own context (load `spring-testing-fast`).
+- Point the client at it with a `DynamicPropertyRegistrar` bean in the suite's shared test configuration: `registry -> registry.add("weather.base-url", server::baseUrl)`. A `@DynamicPropertySource` method in each test class is part of that class's cache key, so every class gets its own context (load `be-spring-testing-fast`).
 - WireMock: a read timeout is `stubFor(get(urlPathEqualTo("/weather")).willReturn(ok().withFixedDelay(2_000)))`, and a dropped connection is `aResponse().withFault(Fault.CONNECTION_RESET_BY_PEER)`.
