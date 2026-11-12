@@ -1,5 +1,5 @@
 ---
-name: spring-testing-persistence
+name: be-spring-testing-persistence
 description: Test the persistence layer of Spring Boot apps on Spring Data JDBC and JdbcClient - aggregate repositories, custom and JdbcClient queries, streaming reads, aggregate mappings, database constraints, Flyway migrations and transactions - with PostgreSQL in Testcontainers and @ServiceConnection, @DataJdbcTest/@JdbcTest and @Sql. Use when adding or changing repositories, queries, entities or migrations, or when Spring tests need a database.
 ---
 
@@ -13,7 +13,7 @@ In the Elysium Java base persistence is Spring Data JDBC (aggregate writes) plus
 
 1. **Inventory** the repositories, `JdbcClient` queries and entities you touched: queries, mappings, constraints, migrations.
 2. **Run against the production engine** with a Testcontainers database shared by the whole suite (below).
-3. **Write repository tests in the suite's shared `@SpringBootTest`**: autowire the repositories, reset data in `@BeforeEach`. Use a data slice only in a large, slow-starting app (load `spring-testing-strategy`).
+3. **Write repository tests in the suite's shared `@SpringBootTest`**: autowire the repositories, reset data in `@BeforeEach`. Use a data slice only in a large, slow-starting app (load `be-spring-testing-strategy`).
 4. **Per query**: data that must match, and look-alike data that must not (boundary dates, case differences, nulls, another user's rows). Assert ordering and paging when the query declares them.
 5. **Per mapping**: save, then reload from the database (see **Round trips**) and assert every mapped field, child collection and the incremented `@Version`.
 6. **Per constraint**: violate it and expect `DataIntegrityViolationException`.
@@ -39,7 +39,7 @@ public class TestcontainersConfiguration {
 ```
 
 - `@ServiceConnection` points the datasource at the container; no URL or credential properties needed. The container starts with the context and stops when the context closes.
-- `@Import(TestcontainersConfiguration.class)` from the suite's shared meta-annotation, so every class shares one context and one container (load `spring-testing-fast`).
+- `@Import(TestcontainersConfiguration.class)` from the suite's shared meta-annotation, so every class shares one context and one container (load `be-spring-testing-fast`).
 - Starting the context runs Flyway against the container, so `contextLoads()` proves the migrations apply to the real engine. The image's major version matches production (PostgreSQL 18); never test on H2 or another major version.
 - **Tie the container's lifecycle to the context, as above.** A `static @Container` field under `@Testcontainers` is stopped by JUnit after its class, while the cached context still points at it: the next class that reuses that context fails with connection errors. Its `@DynamicPropertySource` method also gives each class its own cache key.
 - To run the app locally against the same container, add a `main` in `src/test`: `SpringApplication.from(MyApplication::main).with(TestcontainersConfiguration.class).run(args)`.
@@ -98,7 +98,7 @@ For flow tests, reset data in `@BeforeEach` instead. To test a `@Transactional` 
 
 ## Slices: `@DataJdbcTest`, `@JdbcTest`
 
-Only for a large, slow-starting app (load `spring-testing-strategy`). If the suite already has `@SpringBootTest` classes, autowire repositories there instead: you reuse the cached context and pay no second startup.
+Only for a large, slow-starting app (load `be-spring-testing-strategy`). If the suite already has `@SpringBootTest` classes, autowire repositories there instead: you reuse the cached context and pay no second startup.
 
 - `@DataJdbcTest` loads Spring Data JDBC repositories, the mapping context, the datasource and migrations; `@JdbcTest` loads the datasource, `JdbcTemplate`/`JdbcClient` and migrations, for read queries without repositories. Each comes from the matching Boot 4 test starter (Spring Data JDBC, or JDBC). `@DataJpaTest` does not apply — the base has no JPA.
 - Your `@Repository` classes that wrap a Spring Data repository and a MapStruct persistence mapper are not component-scanned by these slices: `@Import` them (and the mapper) explicitly.
@@ -109,7 +109,7 @@ Only for a large, slow-starting app (load `spring-testing-strategy`). If the sui
 
 ## Migrations
 
-Flyway CI checks (format and duplicate versions, `flyway validate`, empty database, upgrade from the last release) are described in the `flyway-migrations` skill; the persistence suite runs on the database those checks produce.
+Flyway CI checks (format and duplicate versions, `flyway validate`, empty database, upgrade from the last release) are described in the `db-flyway-migrations` skill; the persistence suite runs on the database those checks produce.
 
 ## Provenance
 

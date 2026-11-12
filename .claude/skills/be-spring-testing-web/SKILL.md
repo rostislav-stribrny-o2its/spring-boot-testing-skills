@@ -1,5 +1,5 @@
 ---
-name: spring-testing-web
+name: be-spring-testing-web
 description: HTTP-level tests for Spring Boot web apps with MockMvcTester, RestTestClient or WebTestClient - requests, JSON assertions, stubbing collaborators, full-server RANDOM_PORT tests. Use when testing controllers, REST/JSON endpoints, error handling and status codes, or WebFlux handlers.
 ---
 
@@ -19,11 +19,11 @@ Other cases:
 
 - **WebFlux apps**, legacy `MockMvc` / `TestRestTemplate`, or `WebTestClient` / `RestTestClient` style: read [other-clients.md](other-clients.md).
 - **HTML structure, forms, clicks, JavaScript**: load `spring-testing-browser`.
-- **Secured endpoints** (401/403, CSRF, fake users): load `spring-testing-security` alongside this skill.
+- **Secured endpoints** (401/403, CSRF, fake users): load `be-spring-testing-security` alongside this skill.
 
 ## Steps: writing a web test class
 
-1. **Start from the suite's shared test annotation** if one exists, otherwise `@SpringBootTest @AutoConfigureMockMvc`. Any extra per-class configuration costs a new context; load `spring-testing-fast` first.
+1. **Start from the suite's shared test annotation** if one exists, otherwise `@SpringBootTest @AutoConfigureMockMvc`. Any extra per-class configuration costs a new context; load `be-spring-testing-fast` first.
 2. **Stub external systems.** `@MockitoBean` the beans that reach outside the app (third-party APIs, remote services). Give them default answers in `@BeforeEach`, and override per test where the scenario needs it.
 3. **Reset state** in `@BeforeEach` (`repository.deleteAll()`), because the context and its data are shared across test classes.
 4. **Add domain helpers** for repeated arrange steps (`selectCity("Paris")`), so each test reads as intent.
@@ -90,12 +90,12 @@ class WeatherApiTests {
 
 ## Web slice: `@WebMvcTest`
 
-Only for a large, slow-starting app where you want a fast loop on the web layer; otherwise use the shared `@SpringBootTest` (load `spring-testing-strategy` for the trade-off).
+Only for a large, slow-starting app where you want a fast loop on the web layer; otherwise use the shared `@SpringBootTest` (load `be-spring-testing-strategy` for the trade-off).
 
 - `@WebMvcTest(controllers = { A.class, B.class })` (`org.springframework.boot.webmvc.test.autoconfigure`) loads those controllers, `@ControllerAdvice`, converters, filters and other web components, and auto-configures `MockMvcTester`. Services and repositories are not loaded.
 - Provide the controllers' dependencies with `@MockitoBean`.
 - Group related controllers that share dependencies in one slice. A slice per controller is one context per controller, which thrashes the cache.
-- A slice doesn't load your `SecurityFilterChain`: import it (load `spring-testing-security`).
+- A slice doesn't load your `SecurityFilterChain`: import it (load `be-spring-testing-security`).
 - Everything else in this skill (requests, assertions, the mock MVC limits below) applies unchanged.
 
 ## What the mock MVC stack does not run
