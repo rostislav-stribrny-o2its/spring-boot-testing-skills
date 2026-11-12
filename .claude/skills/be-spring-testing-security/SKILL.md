@@ -19,7 +19,7 @@ The backend of the base is a stateless OAuth2 resource server (see the `be-oauth
 - Include the rows the app's own rules add: a valid token for a person **unknown to the application** must reach nothing but the explicit status endpoint; a role removed in the database must stop working without a new token (after the cache period).
 - Sections below about form login, `@WithUserDetails`, login pages, OIDC login and HTML output escaping apply to server-rendered apps and to frontends, not to the base backend.
 
-**Opereta rows** (application roles, principal `personal_number`; see the `oauth2-resource-server` skill) — add them to every access matrix:
+**Opereta rows** (application roles, principal `personal_number`; see the `be-oauth2-resource-server` skill) — add them to every access matrix:
 
 - token without the entry role → `403` everywhere;
 - entry role, person **not paired** → `/api/me` `403` `application/problem+json`, `type` `/problems/no-access`, `reason: UNPAIRED`; every other endpoint `403`; an audit record;
