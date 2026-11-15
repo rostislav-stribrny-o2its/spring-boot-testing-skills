@@ -1,13 +1,14 @@
 ---
 name: be-spring-testing-persistence
-description: Test the persistence layer of Spring Boot apps on Spring Data JDBC and JdbcClient - aggregate repositories, custom and JdbcClient queries, streaming reads, aggregate mappings, database constraints, Flyway migrations and transactions - with PostgreSQL in Testcontainers and @ServiceConnection, @DataJdbcTest/@JdbcTest and @Sql. Use when adding or changing repositories, queries, entities or migrations, or when Spring tests need a database.
+description: >
+  Java/Spring backend: test the persistence layer of Spring Boot apps on Spring Data JDBC and JdbcClient - aggregate repositories, custom and JdbcClient queries, streaming reads, aggregate mappings, database constraints, Flyway migrations and transactions - with PostgreSQL in Testcontainers and @ServiceConnection, @DataJdbcTest/@JdbcTest and @Sql. Use when adding or changing repositories, queries, entities or migrations, or when Spring tests need a database.
 ---
 
 # Testing persistence
 
 Test what is built from *your* declarations: derived query method names, `@Query` SQL, `JdbcClient` queries and their row mappers, custom repository implementations, aggregate mappings (`@Table`, `@MappedCollection`, `@Embedded`, converters, `@Version`), the persistence mapper between domain and `…Entity`, database constraints, and migrations. Plain `save` / `findById` is Spring Data's own code; flow tests exercise it.
 
-In the Elysium Java base persistence is Spring Data JDBC (aggregate writes) plus `JdbcClient` (reads) on PostgreSQL 18. There is no JPA: no persistence context, no lazy loading, no `TestEntityManager`.
+In this application persistence is Spring Data JDBC (aggregate writes) plus `JdbcClient` (reads) on PostgreSQL 18. There is no JPA: no persistence context, no lazy loading, no `TestEntityManager`.
 
 ## Steps
 
@@ -33,13 +34,16 @@ public class TestcontainersConfiguration {
     @Bean
     @ServiceConnection
     PostgreSQLContainer postgres() {
-        return new PostgreSQLContainer("postgres:18"); // same major version as production
+        return new PostgreSQLContainer(TestImages.POSTGRES)     // same reference as docker-compose.yml
+            .withInitScript("db/test-admin.sql");                // schemas and roles, as the DB admin script
     }
 }
 ```
 
+The full base class (`AbstractIT`), `TestImages` and `db/test-admin.sql` are defined in `be-testing-conventions`.
+
 - `@ServiceConnection` points the datasource at the container; no URL or credential properties needed. The container starts with the context and stops when the context closes.
-- `@Import(TestcontainersConfiguration.class)` from the suite's shared meta-annotation, so every class shares one context and one container (load `be-spring-testing-fast`).
+- `@Import(TestcontainersConfiguration.class)` on the application's shared IT base class (`AbstractIT`), so every class shares one context and one container (load `be-spring-testing-fast`).
 - Starting the context runs Flyway against the container, so `contextLoads()` proves the migrations apply to the real engine. The image's major version matches production (PostgreSQL 18); never test on H2 or another major version.
 - **Tie the container's lifecycle to the context, as above.** A `static @Container` field under `@Testcontainers` is stopped by JUnit after its class, while the cached context still points at it: the next class that reuses that context fails with connection errors. Its `@DynamicPropertySource` method also gives each class its own cache key.
 - To run the app locally against the same container, add a `main` in `src/test`: `SpringApplication.from(MyApplication::main).with(TestcontainersConfiguration.class).run(args)`.
@@ -47,8 +51,7 @@ public class TestcontainersConfiguration {
 ## Repository tests
 
 ```java
-@AppTest // the suite's shared meta-annotation, importing TestcontainersConfiguration
-class CityRepositoryTests {
+class CityRepositoryIT extends AbstractIT {   // shared base class, importing TestcontainersConfiguration
 
     @Autowired CityRepository cityRepository;
 
@@ -113,8 +116,8 @@ Flyway CI checks (format and duplicate versions, `flyway validate`, empty databa
 
 ## Provenance
 
-Modified for the Elysium Java base (Spring Data JDBC + `JdbcClient`, no JPA, PostgreSQL 18) — this file has been changed from the original.
+Modified for this application's Java base (Spring Data JDBC + `JdbcClient`, no JPA, PostgreSQL 18) — this file has been changed from the original.
 Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
-`skills/spring-testing-persistence`, Apache License 2.0 (see the repository `LICENSE`); original content by Daniel Garnier-Moiroux,
+`skills/spring-testing-persistence`, Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux,
 distilled from the book *Spring Boot Testing In Action*.
 Changes: JPA-specific round trips and `@DataJpaTest` replaced by Spring Data JDBC and `JdbcClient`, streaming reads, PostgreSQL 18 image.

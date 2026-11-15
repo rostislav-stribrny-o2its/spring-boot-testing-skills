@@ -13,7 +13,7 @@ import org.springframework.test.web.reactive.server.assertj.WebTestClientRespons
 
 @SpringBootTest
 @AutoConfigureWebTestClient
-class ApiTests {
+class ApiIT {   // name by be-testing-conventions; WebFlux is not used by this backend
 
     @Autowired WebTestClient client;
 

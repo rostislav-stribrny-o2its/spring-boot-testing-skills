@@ -1,6 +1,7 @@
 ---
 name: be-spring-testing-web
-description: HTTP-level tests for Spring Boot web apps with MockMvcTester, RestTestClient or WebTestClient - requests, JSON assertions, stubbing collaborators, full-server RANDOM_PORT tests. Use when testing controllers, REST/JSON endpoints, error handling and status codes, or WebFlux handlers.
+description: >
+  Java/Spring backend: HTTP-level tests for Spring Boot web apps with MockMvcTester, RestTestClient or WebTestClient - requests, JSON assertions, stubbing collaborators, full-server RANDOM_PORT tests. Use when testing controllers, REST/JSON endpoints, error handling and status codes, or WebFlux handlers.
 ---
 
 # Testing Spring web applications
@@ -18,28 +19,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 Other cases:
 
 - **WebFlux apps**, legacy `MockMvc` / `TestRestTemplate`, or `WebTestClient` / `RestTestClient` style: read [other-clients.md](other-clients.md).
-- **HTML structure, forms, clicks, JavaScript**: load `spring-testing-browser`.
+- **HTML structure, forms, clicks, JavaScript**: not served by this backend (the frontend has its own tests).
 - **Secured endpoints** (401/403, CSRF, fake users): load `be-spring-testing-security` alongside this skill.
 
 ## Steps: writing a web test class
 
-1. **Start from the suite's shared test annotation** if one exists, otherwise `@SpringBootTest @AutoConfigureMockMvc`. Any extra per-class configuration costs a new context; load `be-spring-testing-fast` first.
-2. **Stub external systems.** `@MockitoBean` the beans that reach outside the app (third-party APIs, remote services). Give them default answers in `@BeforeEach`, and override per test where the scenario needs it.
+1. **Extend the application's shared IT base class** (`AbstractIT`, `be-testing-conventions`); the class is an `*IT`. Any extra per-class configuration costs a new context; load `be-spring-testing-fast` first.
+2. **Stub external systems.** The beans that reach outside the app (e.g. the mail sender) are `@MockitoBean`s declared once in the base class; autowire them, give them default answers in `@BeforeEach`, and override per test where the scenario needs it.
 3. **Reset state** in `@BeforeEach` (`repository.deleteAll()`), because the context and its data are shared across test classes.
 4. **Add domain helpers** for repeated arrange steps (`selectCity("Paris")`), so each test reads as intent.
 5. **Write each test as arrange / act / assert.** Keep the exchange result in a `response` variable, then assert.
-6. **Cover the error paths**, not just the happy path: validation failures (400), not found (404), conflicts (409), and whatever `@ExceptionHandler` / `@ControllerAdvice` maps. Use `doThrow(...).when(mock).method(...)` for `void` methods.
+6. **Cover the error paths**, not just the happy path: invalid fields (422), unreadable body (400), not found (404), conflicts (409), and whatever the global handler maps (`be-problem-details-rfc9457`). Use `doThrow(...).when(mock).method(...)` for `void` methods.
 
 Done when every endpoint you touched has at least its success status, its body contract and each mapped error status asserted.
 
 ```java
-@SpringBootTest
-@AutoConfigureMockMvc
-class WeatherApiTests {
+class WeatherApiIT extends AbstractIT {   // @SpringBootTest + @AutoConfigureMockMvc + mocks live in the base class
 
     @Autowired MockMvcTester mvc;
     @Autowired SelectionRepository selectionRepository;
-    @MockitoBean WeatherService weatherService;
+    @Autowired WeatherService weatherService;   // a @MockitoBean declared in AbstractIT
 
     @BeforeEach
     void setUp() {
@@ -79,7 +78,7 @@ class WeatherApiTests {
 **Assertions** on `assertThat(response)`:
 
 - Status and headers: `.hasStatus(HttpStatus.CREATED)`, `.hasStatus2xxSuccessful()`, `.hasRedirectedUrl("/login")`, `.hasErrorMessage(...)`, `.body().isEmpty()`.
-- `.bodyText().contains(...)`: fine for a sanity check on HTML; for structure, load `spring-testing-browser`. On failure it prints the whole page.
+- `.bodyText().contains(...)`: fine for a sanity check on text. On failure it prints the whole body.
 - JSON:
   - `.bodyJson().isLenientlyEqualTo(json)` ignores property order and properties missing from the expected document. Prefer it: assert the stable fields, skip generated ids.
   - `.bodyJson().isEqualTo(json)` is strict.
@@ -92,7 +91,7 @@ class WeatherApiTests {
 
 Only for a large, slow-starting app where you want a fast loop on the web layer; otherwise use the shared `@SpringBootTest` (load `be-spring-testing-strategy` for the trade-off).
 
-- `@WebMvcTest(controllers = { A.class, B.class })` (`org.springframework.boot.webmvc.test.autoconfigure`) loads those controllers, `@ControllerAdvice`, converters, filters and other web components, and auto-configures `MockMvcTester`. Services and repositories are not loaded.
+- `@WebMvcTest(controllers = { A.class, B.class })` (`org.springframework.boot.webmvc.test.autoconfigure`) loads those controllers, `@ControllerAdvice`, converters, filters and other web components, and auto-configures `MockMvcTester`. Services and repositories are not loaded. With the delegate pattern the controllers are the generated `…ApiController`s; `@Import` the matching `…ApiDelegateImpl` (and `LibSecurityConfiguration`). A slice with mocks is a `*Test` (`be-testing-conventions`).
 - Provide the controllers' dependencies with `@MockitoBean`.
 - Group related controllers that share dependencies in one slice. A slice per controller is one context per controller, which thrashes the cache.
 - A slice doesn't load your `SecurityFilterChain`: import it (load `be-spring-testing-security`).
@@ -113,7 +112,7 @@ When you need what the container does, start the real server on a random port:
 ```java
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @AutoConfigureRestTestClient // org.springframework.boot.resttestclient.autoconfigure
-class ErrorPageTests {
+class ErrorPageIT {   // its own context (RANDOM_PORT): only where the container itself is under test
 
     @Autowired RestTestClient client; // base URL preset to the running server
 
@@ -132,3 +131,11 @@ class ErrorPageTests {
 - `@LocalServerPort int port` gives the port to clients you build yourself, such as `RestClient.builder().baseUrl("http://localhost:" + port)`.
 - **Debugging**: put a breakpoint in the test, read `port`, and open `http://localhost:<port>` in a browser to see the app with the test's data. In IntelliJ IDEA, set the breakpoint to suspend only the test thread (right-click › Suspend › Thread), otherwise the server is frozen too.
 - Each `webEnvironment` value is a separate cached context: keep full-server tests to the ones that need the container.
+
+## Provenance
+
+Modified for this application's Java base — this file has been changed from the original.
+Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
+Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux.
+Changes: test classes extend the shared IT base class and use the `*IT` suffix; error statuses per
+ADR-00007 (422/400); slices with the generated controllers; browser-testing references removed.

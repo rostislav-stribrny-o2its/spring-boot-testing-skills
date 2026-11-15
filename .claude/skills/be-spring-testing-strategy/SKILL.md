@@ -1,6 +1,7 @@
 ---
 name: be-spring-testing-strategy
-description: Choose the kind of test for Spring Boot code - plain unit test, @SpringBootTest, test slice, Spring Modulith module test, SpringApplicationBuilder, or browser test. Use when about to write tests in a Spring Boot app, or when deciding where a new test belongs.
+description: >
+  Java/Spring backend: choose the kind of test for Spring Boot code - plain unit test, @SpringBootTest, test slice, Spring Modulith module test or SpringApplicationBuilder. Use when about to write tests in a Spring Boot app, or when deciding where a new test belongs.
 ---
 
 # Spring testing strategy
@@ -21,21 +22,21 @@ Done when every planned test has a type and a reason drawn from the table.
 | What can break | Test type | Skill to load |
 |---|---|---|
 | Business logic with many branches, calculations, input combinations | Plain JUnit unit test: `new` the class, pass collaborators (mocks or hand-written stubs) to the constructor, call methods directly. No Spring, runs in milliseconds. | — |
-| A user flow: HTTP request → controller → services → database | `@SpringBootTest` + `@AutoConfigureMockMvc` + `MockMvcTester` | `be-spring-testing-web` |
+| A user flow: HTTP request → controller → services → database | `MockMvcTester` in a class extending the shared base class `AbstractIT` (`@SpringBootTest` + `@AutoConfigureMockMvc`) | `be-spring-testing-web` |
 | Servlet-container behaviour: error pages, sessions, Tomcat valves | `@SpringBootTest(webEnvironment = RANDOM_PORT)` | `be-spring-testing-web` |
-| HTML structure, forms, clicks, JavaScript | HtmlUnit (mock MVC) or Selenium (real browser) | `spring-testing-browser` |
-| Who may call what: URL rules, method security, CSRF, login | The row above that matches, plus Spring Security test support | `be-spring-testing-security` |
+| Who may call what: URL rules, method security, CSRF | The row above that matches, plus Spring Security test support | `be-spring-testing-security` |
 | `@ConfigurationProperties` binding, validation, app refusing to start on bad config | Validator unit tests, or `SpringApplicationBuilder` | `be-spring-testing-properties` |
 | Custom queries, entity mappings, constraints, migrations, transactional behaviour | Repository tests in the shared `@SpringBootTest`, against the real database engine | `be-spring-testing-persistence` |
-| Outbound HTTP client code: the requests the app sends, how it maps responses and errors | `MockRestServiceServer`, alone or with `@RestClientTest` | `be-spring-testing-http-client` |
-| One technical layer of a large, slow-starting app, while iterating fast | Test slice: `@WebMvcTest`, `@DataJpaTest`, `@RestClientTest`, … (see **Slices**) | the layer's skill |
+| Outbound HTTP client code (none in phase 1): the requests the app sends, how it maps responses and errors | `MockRestServiceServer`, alone or with `@RestClientTest` | — |
+| Reading a source database (`scheduler-service`) | MS SQL in Testcontainers in the shared base class | `be-testing-conventions` |
+| One technical layer of a large, slow-starting app, while iterating fast | Test slice: `@WebMvcTest`, `@DataJdbcTest`, `@JdbcTest`, … (see **Slices**) | the layer's skill |
 | One business module of a Spring Modulith app | `@ApplicationModuleTest`; read [modules.md](modules.md) | — |
 | The app wires up and its properties are valid | The `contextLoads()` test from start.spring.io | — |
 
 ## Rules of thumb
 
 - **Flows in Spring tests, branches in unit tests.** A Spring Boot test expresses "when the user does X, Y happens". When reaching one branch needs elaborate GIVEN setup across many beans, extract that logic into a class and unit-test the branches there.
-- **Stub external systems.** Replace third-party APIs and services you don't run locally with `@MockitoBean` or a `@TestBean` stub. Live calls make tests slow, flaky and quota-hungry, and they can't simulate failure modes. Leave real calls to end-to-end tests outside the Spring test suite. The client code that talks to those systems gets its own tests: load `be-spring-testing-http-client`.
+- **Stub external systems.** Replace third-party APIs and services you don't run locally with `@MockitoBean` or a `@TestBean` stub. Live calls make tests slow, flaky and quota-hungry, and they can't simulate failure modes. Leave real calls to end-to-end tests outside the Spring test suite. Mocks of external systems are declared once, in the shared base class (`be-testing-conventions`).
 - **Verify through behaviour.** Assert on HTTP responses and on services, not on repository tables, so a data-model refactoring doesn't break behaviour tests.
 - **Each distinct configuration is another application context.** Load `be-spring-testing-fast`.
 
@@ -50,8 +51,16 @@ Otherwise a `@SpringBootTest` that reuses the suite's cached context is faster o
 
 - **One slice annotation per class.** Each slice carries its own `@BootstrapWith`; combining two fails with `found multiple declarations of @BootstrapWith`.
 - **If a slice needs many mocks**, the code under test depends on too much: that is an architecture signal.
-- How to write each slice lives with its layer: `@WebMvcTest` in `be-spring-testing-web`, `@DataJpaTest` / `@DataJdbcTest` / `@JdbcTest` in `be-spring-testing-persistence`, `@RestClientTest` in `be-spring-testing-http-client`.
+- How to write each slice lives with its layer: `@WebMvcTest` in `be-spring-testing-web`, `@DataJdbcTest` / `@JdbcTest` in `be-spring-testing-persistence` (no JPA in this backend).
+- Naming: a slice with mocks is a `*Test`; everything on the shared base class is an `*IT` (`be-testing-conventions`).
 
 ## Startup failures
 
 `@SpringBootTest` can't test an app that is supposed to fail on startup: the class errors before any test method runs. Build the app with `SpringApplicationBuilder` instead: load `be-spring-testing-properties`.
+
+## Provenance
+
+Modified for this application's Java base — this file has been changed from the original.
+Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
+Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux.
+Changes: flows on the shared IT base class, no JPA slices, references to skills not used here removed.

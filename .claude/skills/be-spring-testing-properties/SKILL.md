@@ -1,6 +1,7 @@
 ---
 name: be-spring-testing-properties
-description: Test Spring Boot configuration - @ConfigurationProperties binding and defaults, Bean Validation constraints on properties, and apps that must refuse to start on invalid config. Use when adding or changing configuration properties, their validation, or startup checks such as InitializingBean on configuration.
+description: >
+  Java/Spring backend: test Spring Boot configuration - @ConfigurationProperties binding and defaults, Bean Validation constraints on properties, and apps that must refuse to start on invalid config. Use when adding or changing configuration properties, their validation, or startup checks such as InitializingBean on configuration.
 ---
 
 # Testing configuration and properties
@@ -34,7 +35,7 @@ Done when every constraint has a failing-value test, every `@Valid` cascade is p
 Plain unit tests. No Spring context, so no annotation on the class:
 
 ```java
-class PreferencesPropertiesTests {
+class PreferencesPropertiesTest {   // unit test without Spring = *Test (be-testing-conventions)
 
     LocalValidatorFactoryBean validator = new LocalValidatorFactoryBean();
 
@@ -141,3 +142,11 @@ For the `@SpringBootTest` row of the table:
 - Keep test-only property files under `src/test/resources` with distinct names. A `src/test/resources/application.properties` *replaces* the main one, so tests silently drift from production config. Override individual values with the mechanisms above instead.
 - For a narrow binding test, `@SpringBootTest(classes = PreferencesConfiguration.class, webEnvironment = NONE)` avoids loading the data layer.
 - `@DynamicPropertySource` / `DynamicPropertyRegistrar` inject values only known at runtime, such as a Testcontainers port.
+- In this backend the default configuration is the shared IT base class (`AbstractIT`, `be-testing-conventions`); a test that needs another property set is a deliberate second context, named `*IT`.
+
+## Provenance
+
+Modified for this application's Java base — this file has been changed from the original.
+Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
+Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux.
+Changes: test class names follow `be-testing-conventions` (`*Test` / `*IT`).
