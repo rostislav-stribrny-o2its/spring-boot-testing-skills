@@ -1,199 +1,287 @@
 ---
 name: be-spring-testing-security
-description: Test Spring Security in Spring Boot apps - fake users (@WithMockUser, @WithUserDetails, user(), authentication(), oidcLogin(), jwt()), CSRF, URL and method authorization rules, custom principals, login pages, and security components such as UserDetailsService or OidcUserService. Use when a test calls secured endpoints or services, or when testing who may access what.
+description: >
+  Java/Spring backend: use when a test calls secured endpoints or services, or tests who may
+  access what — fake callers with jwt(), authentication() and @WithMockUser, authorities as the
+  Keycloak converter produces them, the access matrix (401/403/no-access reasons), CSRF for a
+  bearer API, method security, and the one integration test against a real Keycloak in Testcontainers.
 ---
 
 # Testing application security
 
-Spring Security test support (`org.springframework.boot:spring-boot-starter-security-test`, test scope) fakes an authenticated user by populating the `SecurityContext`. Load `be-spring-testing-web` alongside it for HTTP tests, and `spring-testing-browser` for login flows.
+Spring Security test support (`spring-boot-starter-security-test`, test scope) fakes an
+authenticated caller by populating the `SecurityContext`. Load `be-spring-testing-web` alongside it
+for HTTP tests. OIDC login, opaque tokens and WebFlux are not used by this backend.
 
-For OAuth2 / OIDC login, JWT resource servers or WebFlux, also read [tokens-and-reactive.md](tokens-and-reactive.md).
+The backend is a stateless OAuth2 resource server with Keycloak (`be-oauth2-resource-server`):
+bearer JWTs, no login form, no session, CSRF off. Not yet verified by a build in this repository.
 
-## Elysium Java base: a stateless resource server
+## Two levels
 
-The backend of the base is a stateless OAuth2 resource server (see the `be-oauth2-resource-server` skill): bearer JWTs from an external identity provider, no login form, no `UserDetailsService`, no session and CSRF disabled. For such an app:
+| Level | Suffix | What it proves | Keycloak |
+|---|---|---|---|
+| access matrix | `*Test` for a `@WebMvcTest` slice with mocks; `*IT` for tests in the shared context (`AbstractIT`) — the rule of `be-testing-conventions` | every rule of the access matrix, per operation | faked: `authentication(...)`, `jwt()`, `@WithMockUser` |
+| **one** Keycloak IT | `*IT` | the real token passes our decoder: issuer, JWKS/RS256, audience, `azp`, claims, converter | real, in Testcontainers |
 
-- Anonymous requests get **`401`**, never a redirect to a login page.
-- Fake the caller with `jwt()` (bearer token) — see [tokens-and-reactive.md](tokens-and-reactive.md). `@WithMockUser` is fine for method-security tests on services.
-- `jwt()` **bypasses the app's converter**. If authorities come from the application database (application-roles model), test the converter bean itself against the database (see **Unit-testing security components** and the tokens file), and give `jwt()` the authorities that converter would produce.
-- Include the rows the app's own rules add: a valid token for a person **unknown to the application** must reach nothing but the explicit status endpoint; a role removed in the database must stop working without a new token (after the cache period).
-- Sections below about form login, `@WithUserDetails`, login pages, OIDC login and HTML output escaping apply to server-rendered apps and to frontends, not to the base backend.
+The fakes **bypass the decoder and the converter**. The matrix is therefore tested with fakes
+(fast, many rows), the converter is unit-tested, and one IT proves the real chain end to end.
 
-**Opereta rows** (application roles, principal `personal_number`; see the `be-oauth2-resource-server` skill) — add them to every access matrix:
+## Faking the caller — authorities as the converter produces them
 
-- token without the entry role → `403` everywhere;
-- entry role, person **not paired** → `/api/me` `403` `application/problem+json`, `type` `/problems/no-access`, `reason: UNPAIRED`; every other endpoint `403`; an audit record;
-- paired person → `/api/me` `200` with `user.id` (number), `personalNumber`, `roles`, `permissions`;
-- person **suspended** → `/api/me` and **any other** endpoint `403` `/problems/no-access` with `reason: SUSPENDED` (not a generic access-denied problem);
-- paired person without the required business role → `403`; with it → `200`;
-- role removed in the database → `403` after the cache period, without a new token;
-- token without `personal_number` → `401`; invalid or expired token → `401` with `WWW-Authenticate: Bearer error="invalid_token"` and an empty body;
-- role administration: changing one's own roles → rejected; an administrator changing another administrator's roles → rejected; every accepted change audited;
-- the converter itself is tested against the Testcontainers database (see [tokens-and-reactive.md](tokens-and-reactive.md)); `jwt()` in MockMvc tests gets the authorities that converter would produce.
+API delegates and services read `AppAuthentication.current()`; a plain `jwt()` or `@WithMockUser`
+gives a different type, and that code then fails. Build the caller with the **real converter** and a
+fixed access decision, so the authorities are exactly what production produces:
 
-## Steps
+```java
+public final class TestAuthentications {   // backend-service src/test (the only application with security)
 
-1. **List the rules.** Read the `SecurityFilterChain` and the `@PreAuthorize` / `@Secured` annotations. Write down each protected resource and who may reach it.
-2. **Write the access matrix.** For each rule, plan one test per row:
-   - **anonymous**: no user at all. Expect `401` for a resource server (the base) or HTTP Basic, or a `302` redirect to the login page with form login.
-   - **authenticated, missing authority**. Expect `403`, or `AccessDeniedException` from a service.
-   - **authorized**. Expect success, and assert on the content too.
-   - **each authentication mechanism the app supports** (form login, OIDC, …) when roles are derived differently per mechanism.
-3. **Pick the fake user** for each test from the table below.
-4. **Handle CSRF** on `POST`/`PUT`/`PATCH`/`DELETE` when the app uses cookies (see **CSRF**); a stateless bearer-token API (the base) has CSRF disabled.
-5. **Unit-test the security components** (user services, authority mapping, principal types) without Spring.
+    // same values as the properties of AbstractIT (be-testing-conventions)
+    private static final AppSecurityProperties PROPS = new AppSecurityProperties(
+        "opereta-spa", "personal_number", "opereta-user", "opereta-api", "/api/users/me");
 
-Done when every rule from step 1 has its anonymous, forbidden and authorized rows, and — in a cookie-based app — every unsafe request either carries a CSRF token or deliberately tests its absence.
+    public static AppAuthentication as(String personalNumber, AccessDecision decision) {
+        Jwt jwt = Jwt.withTokenValue("test-token").header("alg", "none")
+            .subject("account-" + personalNumber)
+            .claim("personal_number", personalNumber)
+            .claim("resource_access", Map.of("opereta-api", Map.of("roles", List.of("opereta-user"))))
+            .build();
+        return new KeycloakJwtAuthenticationConverter(PROPS, (principal, sub) -> decision).convert(jwt);
+    }
 
-## Choosing the fake user
+    public static AppAuthentication active(String personalNumber, long personId, String... roleCodes) {
+        return as(personalNumber, new AccessDecision(AccessState.ACTIVE, personId, Set.of(roleCodes)));
+    }
+
+    public static AppAuthentication withoutAccess(String personalNumber, AccessState reason) {
+        Long personId = reason == AccessState.UNPAIRED ? null : 1L;
+        return as(personalNumber, new AccessDecision(reason, personId, Set.of()));
+    }
+}
+
+// in a test (personal numbers from the reserved test range, never real ones)
+assertThat(mvc.get().uri("/api/projects/7")
+        .with(authentication(TestAuthentications.active("900001", 42L, Roles.PROJECT_MANAGER))))
+    .hasStatusOk();
+```
 
 | Need | Use |
 |---|---|
-| Any logged-in user, by name and roles | `@WithMockUser(username = "test-user", roles = "ADMIN")` (or `authorities = "SCOPE_read"`). The principal is Spring's `User`. |
-| A real user from the app's `UserDetailsService`, with the app's own principal type | `@WithUserDetails("alice")`. Needs the `UserDetailsService` bean in the context and the user to exist. |
-| No user, overriding a class-level annotation | `@WithAnonymousUser` |
-| A different user for one request | `.with(user("bob").roles("USER"))` |
-| An exact `Authentication` with a custom principal | `.with(authentication(new TestingAuthenticationToken(principal, "ignored", authorities)))` |
-| An OIDC login | `.with(oidcLogin()…)`; see [tokens-and-reactive.md](tokens-and-reactive.md) |
-| An unauthenticated request | No annotation, no post-processor |
+| any caller of code that reads `AppAuthentication` | `.with(authentication(TestAuthentications.active(...)))` |
+| unpaired, no role, suspended | `.with(authentication(TestAuthentications.withoutAccess(pn, AccessState.SUSPENDED)))` |
+| a pure URL/role rule, code reads nothing | `.with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ENTRY")))` — authorities exactly as above (`ROLE_ENTRY`, `ROLE_ACTIVE`, `ROLE_<CODE>`) |
+| `@PreAuthorize` on a bean called directly | `@WithMockUser(roles = {"ACTIVE", "APP_ADMIN"})` |
+| no caller | no annotation, no post-processor |
 
-The request post-processors come from `SecurityMockMvcRequestPostProcessors` (`user`, `authentication`, `csrf`, `httpBasic`, `oidcLogin`, `jwt`).
+- `.with(...)` overrides a class- or method-level annotation for that request. Annotations act on the
+  test thread only; a `RANDOM_PORT` server needs a real token (the Keycloak IT).
+- Never sign own JWTs with a test key, never mock `JwtDecoder` to return arbitrary tokens in matrix
+  tests — that tests the mock. Real signatures belong to the Keycloak IT.
 
-- **Scope**: an annotation on the class applies to every test, and a method-level annotation overrides it. A `.with(...)` post-processor overrides both, for that one request. That lets one test act as several users: an admin by annotation, plus `selectCityAs("another-user", …)` through `.with(user("another-user"))`.
-- **Identity**: `@WithMockUser(username = "test-user")` makes `authentication.getName()` return `"test-user"`. Assert per-user data with that same identity.
-- **Thread-bound**: annotations set the `SecurityContext` on the test thread. They apply to `MockMvcTester` and HtmlUnit on the mock MVC stack, and to direct service calls. A `RANDOM_PORT` server handles requests on its own threads, so there you log in for real (submit the login form, send HTTP Basic credentials, or present a token).
+## The access matrix
 
-## Custom principal types
+For each protected operation (read the filter chain and every `@PreAuthorize`), one test per row of
+the general matrix in `be-testing-conventions`, made concrete here: `401` comes with
+`WWW-Authenticate: Bearer error="invalid_token"` and an empty body; a token without the entry role
+gets `403` everywhere; `ACTIVE` without the required business role gets `403`
+`/problems/access-denied`.
 
-When controllers take `@AuthenticationPrincipal MyUser user`, or cast the principal, `@WithMockUser` provides a Spring `User` that is not a `MyUser`. The argument resolves to `null` and the controller fails, typically with a `NullPointerException`. Provide the real type instead:
+**Opereta rows** (per ADR-00004 points 4–6):
 
-- `@WithUserDetails("alice")` when the app has a `UserDetailsService` returning `MyUser`.
-- `.with(authentication(token))` with a test double. A small builder keeps tests readable:
+- unpaired → `/api/users/me` `403` `application/problem+json`, `type` `/problems/no-access`,
+  `reason: UNPAIRED`; every other endpoint the same `403` with `reason`; an audit record with the account's `sub`;
+- paired and active → `/api/users/me` `200` with identity, roles, `permissions`, `Cache-Control: no-store`;
+- a token with only the entry role → `/api/users/me` is reached (not caught by the `/api/**` rule) —
+  guards that `app.security.me-path` equals the contract's path;
+- suspended → `/api/users/me` **and any other** endpoint `403` `/problems/no-access`, `reason: SUSPENDED`;
+- paired without any role → `reason: NO_ROLE`;
+- a ban or a removed role written to the database → effective on the next request (or after the
+  configured cache period, at most 5 minutes), without a new token — tested through `ApplicationAccess`
+  against the database;
+- token without `personal_number` → `401`;
+- role administration: changing one's own roles → rejected; an administrator changing another
+  administrator's roles → rejected; every accepted change audited.
+
+## Unit-testing the converter
+
+Plain JUnit, no Spring: `new KeycloakJwtAuthenticationConverter(props, stubAccess).convert(jwt)` with
+a hand-built `Jwt`. Cover: principal claim missing or blank → `InvalidBearerTokenException`; entry role
+as realm role and as client role of the configured client; entry role of **another** client ignored;
+role names normalised (`opereta-user` → `OPERETA_USER`); business roles only when `ACTIVE`; token roles
+other than the entry role never become authorities; `noAccessReason()` per state.
+
+`ApplicationAccess` itself is a database read: test it as `*IT` against PostgreSQL (person paired,
+unpaired, suspended, without role; role removed).
+
+## Slices: load the real security configuration
+
+A slice without our `SecurityFilterChain` runs under Boot's defaults and passes for the wrong reasons.
 
 ```java
-public class TestUser implements WeatherUser {
-    // fields + getters for id, username, email ...
-
-    public static Builder withUsername(String username) { return new Builder().withUsername(username); }
-
-    public static final class Builder {
-        private String id = "~~ignored id~~";
-        private String username = "Test User";
-        private String email = "test@example.com";
-        private final Set<String> authorities = new HashSet<>();
-        // withId / withUsername / withEmail / withAuthority ... return this
-
-        public Authentication toAuthentication() {
-            return new TestingAuthenticationToken(new TestUser(id, username, email),
-                    "~~ignored credentials~~", AuthorityUtils.createAuthorityList(authorities));
-        }
-    }
+@WebMvcTest(UsersApiController.class)                                  // generated controller of the area
+@Import({UsersApiDelegateImpl.class, LibSecurityConfiguration.class})   // our delegate + real chain (+ lib-web)
+class UsersApiSecurityTest {                                            // slice with mocks = *Test
+    @MockitoBean CurrentUserQuery currentUserQuery;
+    @MockitoBean ApplicationAccess applicationAccess;   // required by the converter bean, not called by fakes
+    @MockitoBean JwtDecoder jwtDecoder;                 // no issuer in a slice; fakes never reach it
+    @Autowired MockMvcTester mvc;
+    …
 }
-
-// in a test
-var response = mvc.get().uri("/api/me")
-    .with(authentication(TestUser.withUsername("Test User").withEmail("test@example.com").toAuthentication()))
-    .exchange();
 ```
 
-For a reusable annotation that builds such a principal, write a custom annotation meta-annotated with `@WithSecurityContext(factory = …)`.
+`@MockitoBean` (Boot 4), never `@MockBean`. Every distinct set of mocks is a new context — keep one
+slice per API area, or test the matrix in the shared context (`AbstractIT`, `be-testing-conventions`).
 
 ## CSRF
 
-A stateless API that authenticates only with bearer tokens disables CSRF (the base does); there, assert once that an unsafe request with a valid token and no CSRF token succeeds. The rest of this section is for cookie-based apps.
-
-With CSRF protection on (the default), an unsafe request without a token gets `403`, even for an admin. That 403 is easy to misread as an authorization failure.
-
-- **Per request**: `.with(csrf())`.
-- **For every request of a context**: register a `MockMvcBuilderCustomizer` in a `@TestConfiguration`. Put it in the suite's shared configuration, since a one-off `@TestConfiguration` costs a new context (load `be-spring-testing-fast`).
-  ```java
-  @Bean
-  MockMvcBuilderCustomizer defaultCsrf() {
-      return builder -> builder.defaultRequest(MockMvcRequestBuilders.get("/").with(csrf()));
-  }
-  ```
-- **Proving protection is on**: send the unsafe request without `csrf()`, or with `csrf().useInvalidToken()`, and expect `403`.
-- **Browser tests**: the page's own JavaScript handles the token (for example the SPA cookie → `X-XSRF-TOKEN` header with `csrf(CsrfConfigurer::spa)`), so HtmlUnit and Selenium flows need no extra setup.
-
-## Slices and modules: load the security configuration
-
-A slice or module test that doesn't load your `SecurityFilterChain` runs under Spring Boot's default security instead of your rules: everything requires authentication, with no role rules. Tests then pass or fail for the wrong reasons. Load the real configuration:
-
-- `@WebMvcTest(controllers = …)` + `@Import(SecurityConfiguration.class)`.
-- Spring Modulith: `@ModuleSlicing(extraIncludes = "security") @WebMvcTest`, or `@ApplicationModuleTest(extraIncludes = "security")`.
-- `@WithUserDetails` needs the `UserDetailsService` bean, which usually lives in that same configuration.
+The API has CSRF disabled (bearer only). Assert once that a `POST` with a valid caller and **no** CSRF
+token succeeds — it guards against someone switching CSRF back on. The cookie-based techniques
+(`csrf()`, `MockMvcBuilderCustomizer`) apply only if the app ever authenticates with a cookie.
 
 ## Method security
 
-Test `@PreAuthorize` rules by calling the bean directly. The security configuration with `@EnableMethodSecurity` must be in the context:
+Call the bean directly with the security configuration in the context:
 
 ```java
-@ApplicationModuleTest(extraIncludes = "security") // or a @SpringBootTest
-class CityServiceTests {
+@Test
+@WithMockUser(roles = {"ACTIVE", "EMPLOYEE"})
+void approve_asEmployee_isDenied() {
+    assertThatExceptionOfType(AccessDeniedException.class).isThrownBy(() -> service.approve(7L));
+}
 
-    @Autowired CityService cityService;
+@Test
+void approve_withoutCaller_requiresAuthentication() {
+    assertThatExceptionOfType(AuthenticationCredentialsNotFoundException.class)
+        .isThrownBy(() -> service.approve(7L));
+}
+```
+
+## One integration test against a real Keycloak
+
+Proves what fakes cannot: the realm in the repository issues RS256 tokens our decoder accepts —
+issuer, JWKS, audience, `azp`, `personal_number`, entry role. Exactly **one** class, cheap by design:
+containers started once per JVM, one Spring context, a handful of requests.
+
+```xml
+<dependency>   <!-- version: testcontainers-keycloak.version in the parent POM (be-maven-reactor) -->
+    <groupId>com.github.dasniko</groupId>
+    <artifactId>testcontainers-keycloak</artifactId>
+    <scope>test</scope>
+</dependency>
+```
+
+```java
+@Tag("keycloak")
+class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-testing-conventions), MockMvc included
+
+    static final Network NETWORK = Network.newNetwork();
+
+    // TestImages holds the references of docker-compose.yml (tag@digest), one place in test code
+    static final KeycloakContainer KEYCLOAK = new KeycloakContainer(TestImages.KEYCLOAK)
+        .withContextPath("/auth").withNetwork(NETWORK).withNetworkAliases("keycloak");
+
+    // the repo realm, applied exactly as docker-compose does (keycloak-config-cli, same image)
+    static final GenericContainer<?> REALM = new GenericContainer<>(TestImages.KEYCLOAK_CONFIG_CLI)
+        .withNetwork(NETWORK)
+        .withCopyFileToContainer(MountableFile.forHostPath(repoPath("keycloak/config")), "/config")
+        .withCopyFileToContainer(MountableFile.forClasspathResource("keycloak/it-client.yaml"), "/it/it-client.yaml")
+        .withEnv(Map.of(
+            "KEYCLOAK_URL", "http://keycloak:8080/auth",
+            "KEYCLOAK_USER", KEYCLOAK.getAdminUsername(),
+            "KEYCLOAK_PASSWORD", KEYCLOAK.getAdminPassword(),
+            "IMPORT_FILES_LOCATIONS", "/config/realm.yaml,/config/development/*.yaml,/it/it-client.yaml",
+            "IMPORT_VARSUBSTITUTION_ENABLED", "true",
+            "KEYCLOAK_REDIRECT_URIS", "http://localhost/*",
+            "APP_ADMIN_EMAIL", "it-admin@example.test",
+            "APP_ADMIN_PASSWORD", "it-only-" + UUID.randomUUID()))   // + every other env lookup the realm still has
+        .withStartupCheckStrategy(new OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(3)));
+
+    static {
+        KEYCLOAK.start();
+        REALM.start();   // runs once, must exit 0
+    }
+
+    @DynamicPropertySource
+    static void oidc(DynamicPropertyRegistry registry) {
+        String issuer = KEYCLOAK.getAuthServerUrl() + "/realms/app";   // the address the test fetches tokens from
+        registry.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> issuer);
+        registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
+            () -> issuer + "/protocol/openid-connect/certs");
+        registry.add("spring.security.oauth2.resourceserver.jwt.audiences", () -> "opereta-api");
+        registry.add("app.security.client-id", () -> "it-direct-grant");
+    }
+
+    @Autowired MockMvcTester mvc;
 
     @Test
-    @WithMockUser(roles = "ADMIN")
-    void adminSeesEveryone() { assertThat(cityService.getSelectedCitiesByUser()).containsOnlyKeys(ALICE, BOB); }
-
-    @Test
-    @WithMockUser(roles = "USER")
-    void forbiddenForNonAdmins() {
-        assertThatExceptionOfType(AccessDeniedException.class).isThrownBy(cityService::getSelectedCitiesByUser);
+    void me_withRealToken_ofPairedPerson_returns200() {
+        // insert the fictitious person whose personal number the test account carries
+        assertThat(mvc.get().uri("/api/users/me")
+                .header(AUTHORIZATION, "Bearer " + token(TEST_ACCOUNT)))
+            .hasStatusOk();
     }
 
     @Test
-    void requiresAuthentication() {
-        assertThatExceptionOfType(AuthenticationCredentialsNotFoundException.class)
-            .isThrownBy(cityService::getSelectedCitiesByUser);
+    void me_withoutToken_returns401() { … }
+
+    @Test
+    void adminOperation_withEmployeeToken_returns403() { … }
+
+    @Test
+    void me_withTamperedToken_returns401() { … }   // flip one character of the signature
+
+    static String token(String alias) {   // direct grant against the IT client
+        var form = new LinkedMultiValueMap<String, String>();
+        form.add("grant_type", "password");
+        form.add("client_id", "it-direct-grant");
+        form.add("username", alias);
+        form.add("password", TestAccounts.password(alias));
+        form.add("scope", "openid");
+        Map<?, ?> body = RestClient.create().post()
+            .uri(KEYCLOAK.getAuthServerUrl() + "/realms/app/protocol/openid-connect/token")
+            .contentType(MediaType.APPLICATION_FORM_URLENCODED).body(form)
+            .retrieve().body(Map.class);
+        return (String) body.get("access_token");
     }
 }
 ```
 
-## Login pages and conditional security features
+- **Realm from the repository**, not a copy: `repoPath(...)` walks up from the working directory to
+  the repository root. The same realm files as LOCAL, so a broken realm breaks this test.
+- **Test-only client** `src/test/resources/keycloak/it-client.yaml`: a client with direct access grants
+  and the API audience mapper, existing only in this test. The frontend client keeps only the
+  authorization-code flow (per ADR-00004, "Jak se dodržení hlídá"); the IT therefore sets
+  `app.security.client-id` to the IT client.
+- **Test account by alias** from `keycloak/config/development/users.yaml`; `TestAccounts` reads its
+  password from that file (SnakeYAML is on the test classpath). Never copy a password into test code.
+  The account needs the `personal_number` attribute and the entry role (realm tasks in
+  `be-oauth2-resource-server`).
+- **Cost**: `@DynamicPropertySource` makes this one extra Spring context — acceptable for one class,
+  never repeat it. Static containers start once and are removed by Testcontainers at JVM exit.
+- **Opt-out locally**: tag `keycloak`, skipped with `-Dit.excludedGroups=keycloak` (Failsafe setup in
+  `be-maven-reactor`); CI runs it. Docker is required (as for every `*IT`).
+- `app.security.role-client-id` and the other OIDC values come from the properties of `AbstractIT`;
+  this class overrides only issuer, JWKS URI, audience and client id.
+- Not yet verified by a build in this repository (container start, `withContextPath`, issuer
+  equality between the token and `getAuthServerUrl()`).
 
-- **Assert where anonymous users land**: `assertThat(response).hasStatus(HttpStatus.FOUND).hasRedirectedUrl("/login")`. With HtmlUnit, `assertThat(page.getUrl()).hasPath("/login")` after loading a protected page under `@WithAnonymousUser`.
-- **Full login/logout round trip**: use HtmlUnit against real credentials from the app's user store. Type into `#username` and `#password`, click submit, `waitForBackgroundJavaScript`, then assert the landing URL and the welcome text. Load `spring-testing-browser`.
-- **Features that switch on with a bean** (an OAuth2 login button shown only when a `ClientRegistrationRepository` exists): test both states. Run one context without the bean, and one with a nested `@TestConfiguration` providing an `InMemoryClientRegistrationRepository`. That is two contexts on purpose.
+## Gotchas
 
-## Output escaping
-
-Pages that render user-controlled values: stub the data source with markup (`"<script>alert('pwned')</script>"`) and assert the escaped form is present and the raw tag absent:
-
-```java
-assertThat(response).bodyText()
-    .contains("&lt;script&gt;alert(&#39;pwned&#39;)&lt;/script&gt;")
-    .doesNotContain("<script>");
-```
-
-## Unit-testing security components
-
-User services, principal types and authority mapping are plain classes: construct them with `new`, no context.
-
-- **`UserDetailsService`**: cover found, `UsernameNotFoundException`, password encoding prefix (`{noop}`, `{bcrypt}`), role prefixing (`USER` → `ROLE_USER`), and `eraseCredentials()` not leaking into the stored user (load twice and compare).
-- **Code taking an `Authentication`**: pass `new TestingAuthenticationToken("alice", null)`.
-- **Custom `OidcUserService` / authority mapping**: build the request by hand. A `ClientRegistration` without a user-info URI makes `OidcUserService` build the user from the ID token alone, with no HTTP call:
-  ```java
-  var registration = ClientRegistration.withRegistrationId("dex").clientId("app")
-      .authorizationGrantType(AuthorizationGrantType.AUTHORIZATION_CODE)
-      .redirectUri("{baseUrl}/login/oauth2/code/{registrationId}")
-      .authorizationUri("https://idp.example.com/authorize").tokenUri("https://idp.example.com/token")
-      .scope("openid", "email", "profile").build();
-  var idToken = OidcIdToken.withTokenValue("id-token").subject("12345").claim("email", "jane@admin.example.com")
-      .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
-  var accessToken = new OAuth2AccessToken(OAuth2AccessToken.TokenType.BEARER, "access-token",
-      Instant.now(), Instant.now().plusSeconds(60));
-
-  var user = new DemoOidcUserService().loadUser(new OidcUserRequest(registration, accessToken, idToken));
-  ```
-- **Probe the edges of every mapping rule**: missing claim, look-alike values (`jane@other.admin.example.com` must not become admin when only `admin.example.com` grants it), case differences.
+- Agent uses plain `jwt()` for code that reads `AppAuthentication` — `authentication(TestAuthentications…)`
+- Agent invents authorities (`ROLE_USER`, `SCOPE_read`) — use what the converter produces: `ROLE_ENTRY`, `ROLE_ACTIVE`, `ROLE_<CODE>`
+- Agent tests only the happy path — every operation gets its 401, 403 and allowed rows
+- Agent disables filters or adds a permissive test security configuration — always the real `LibSecurityConfiguration`
+- Agent adds a second Keycloak IT class or a Keycloak container per test — one class, static containers
+- Agent copies the realm into `src/test/resources` — import the repository realm; only the IT client is test-only
+- Agent enables direct grants on the frontend client for the IT — use the test-only client
+- Agent expects a redirect to a login page — a resource server answers `401`
 
 ## Provenance
 
-Modified for the Elysium Java base (stateless OAuth2 resource server, Spring Security 7) — this file has been changed from the original.
+Modified for this application's Java base (stateless OAuth2 resource server with Keycloak, Spring Security 7) — this file has been changed from the original.
 Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
-`skills/spring-testing-security`, Apache License 2.0 (see the repository `LICENSE`); original content by Daniel Garnier-Moiroux,
+`skills/spring-testing-security`, Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux,
 distilled from the book *Spring Boot Testing In Action*.
-Changes: section for a stateless resource server (401, `jwt()`, converter with application roles), CSRF and access-matrix rows adjusted.
-Opereta layer: access-matrix rows for paired accounts and role administration.
+Changes: callers built with the real converter, access matrix with no-access reasons, slices with the
+library configuration, one Keycloak integration test in Testcontainers; form-login, login-page and
+HTML-escaping sections removed (not used by the base backend).
+Opereta layer: access-matrix rows for paired accounts, suspension and role administration.
