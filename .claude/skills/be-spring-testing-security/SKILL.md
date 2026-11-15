@@ -35,9 +35,9 @@ fixed access decision, so the authorities are exactly what production produces:
 ```java
 public final class TestAuthentications {   // backend-service src/test (the only application with security)
 
-    // same values as the properties of AbstractIT (be-testing-conventions)
+    // example values; use the project's, the same as the properties of AbstractIT (be-testing-conventions)
     private static final AppSecurityProperties PROPS = new AppSecurityProperties(
-        "app-spa", "personal_number", "app-user", "app-api", "/api/users/me");
+        "app-frontend", "personal_number", "app-user", "app-api", "/api/users/me");
 
     public static AppAuthentication as(String personalNumber, AccessDecision decision) {
         Jwt jwt = Jwt.withTokenValue("test-token").header("alg", "none")
@@ -85,7 +85,7 @@ the general matrix in `be-testing-conventions`, made concrete here: `401` comes 
 gets `403` everywhere; `ACTIVE` without the required business role gets `403`
 `/problems/access-denied`.
 
-**Application rows** (per ADR-00004 points 4–6):
+**Rows of the application-roles model** (`be-oauth2-resource-server`):
 
 - unpaired → `/api/users/me` `403` `application/problem+json`, `type` `/problems/no-access`,
   `reason: UNPAIRED`; every other endpoint the same `403` with `reason`; an audit record with the account's `sub`;
@@ -97,7 +97,7 @@ gets `403` everywhere; `ACTIVE` without the required business role gets `403`
 - a ban or a removed role written to the database → effective on the next request (or after the
   configured cache period, at most 5 minutes), without a new token — tested through `ApplicationAccess`
   against the database;
-- token without `personal_number` → `401`;
+- token without the principal claim (example: `personal_number`) → `401`;
 - role administration: changing one's own roles → rejected; an administrator changing another
   administrator's roles → rejected; every accepted change audited.
 
@@ -106,7 +106,7 @@ gets `403` everywhere; `ACTIVE` without the required business role gets `403`
 Plain JUnit, no Spring: `new KeycloakJwtAuthenticationConverter(props, stubAccess).convert(jwt)` with
 a hand-built `Jwt`. Cover: principal claim missing or blank → `InvalidBearerTokenException`; entry role
 as realm role and as client role of the configured client; entry role of **another** client ignored;
-role names normalised (`app-user` → `APP_USER`); business roles only when `ACTIVE`; token roles
+role names normalised (example: `app-user` → `APP_USER`); business roles only when `ACTIVE`; token roles
 other than the entry role never become authorities; `noAccessReason()` per state.
 
 `ApplicationAccess` itself is a database read: test it as `*IT` against PostgreSQL (person paired,
@@ -120,7 +120,7 @@ A slice without our `SecurityFilterChain` runs under Boot's defaults and passes 
 @WebMvcTest(UsersApiController.class)                                  // generated controller of the area
 @Import({UsersApiDelegateImpl.class, LibSecurityConfiguration.class})   // our delegate + real chain (+ lib-web)
 class UsersApiSecurityTest {                                            // slice with mocks = *Test
-    @MockitoBean CurrentUserQuery currentUserQuery;
+    @MockitoBean UserAccessService userAccessService;
     @MockitoBean ApplicationAccess applicationAccess;   // required by the converter bean, not called by fakes
     @MockitoBean JwtDecoder jwtDecoder;                 // no issuer in a slice; fakes never reach it
     @Autowired MockMvcTester mvc;
@@ -158,7 +158,7 @@ void approve_withoutCaller_requiresAuthentication() {
 ## One integration test against a real Keycloak
 
 Proves what fakes cannot: the realm in the repository issues RS256 tokens our decoder accepts —
-issuer, JWKS, audience, `azp`, `personal_number`, entry role. Exactly **one** class, cheap by design:
+issuer, JWKS, audience, `azp`, principal claim, entry role. Exactly **one** class, cheap by design:
 containers started once per JVM, one Spring context, a handful of requests.
 
 ```xml
@@ -206,7 +206,7 @@ class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-test
         registry.add("spring.security.oauth2.resourceserver.jwt.issuer-uri", () -> issuer);
         registry.add("spring.security.oauth2.resourceserver.jwt.jwk-set-uri",
             () -> issuer + "/protocol/openid-connect/certs");
-        registry.add("spring.security.oauth2.resourceserver.jwt.audiences", () -> "app-api");
+        registry.add("spring.security.oauth2.resourceserver.jwt.audiences", () -> "app-api");   // example: API client from realm.yaml
         registry.add("app.security.client-id", () -> "it-direct-grant");
     }
 
@@ -249,11 +249,11 @@ class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-test
   the repository root. The same realm files as LOCAL, so a broken realm breaks this test.
 - **Test-only client** `src/test/resources/keycloak/it-client.yaml`: a client with direct access grants
   and the API audience mapper, existing only in this test. The frontend client keeps only the
-  authorization-code flow (per ADR-00004, "Jak se dodržení hlídá"); the IT therefore sets
+  authorization-code flow with PKCE, every other flow off; the IT therefore sets
   `app.security.client-id` to the IT client.
 - **Test account by alias** from `keycloak/config/development/users.yaml`; `TestAccounts` reads its
   password from that file (SnakeYAML is on the test classpath). Never copy a password into test code.
-  The account needs the `personal_number` attribute and the entry role (realm tasks in
+  The account needs the principal attribute (example: `personal_number`) and the entry role (realm tasks in
   `be-oauth2-resource-server`).
 - **Cost**: `@DynamicPropertySource` makes this one extra Spring context — acceptable for one class,
   never repeat it. Static containers start once and are removed by Testcontainers at JVM exit.
@@ -284,3 +284,4 @@ distilled from the book *Spring Boot Testing In Action*.
 Changes: callers built with the real converter, access matrix with no-access reasons, slices with the
 library configuration, one Keycloak integration test in Testcontainers; form-login, login-page and
 HTML-escaping sections removed (not used by the base backend).
+Application layer: access-matrix rows for paired accounts, suspension and role administration.
