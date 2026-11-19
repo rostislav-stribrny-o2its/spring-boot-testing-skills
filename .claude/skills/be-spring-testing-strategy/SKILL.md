@@ -35,7 +35,6 @@ cases) are set by ADR-STACK-00006.
 | `@ConfigurationProperties` binding, validation, app refusing to start on bad config | Validator unit tests, or `SpringApplicationBuilder` | `be-spring-testing-properties` |
 | Custom queries, entity mappings, constraints, migrations, transactional behaviour | Repository tests in the shared `@SpringBootTest`, against the real database engine | `be-spring-testing-persistence` |
 | Outbound HTTP client code (only when the application has an outbound HTTP integration): the requests the app sends, how it maps responses and errors | `MockRestServiceServer`, alone or with `@RestClientTest` | — |
-| Reading a source database (`scheduler-service`) | The source's database engine in Testcontainers in the shared base class (the image matching the application's source; example: MS SQL) | `be-testing-conventions` |
 | One technical layer of a large, slow-starting app, while iterating fast | Test slice: `@WebMvcTest`, `@DataJdbcTest`, `@JdbcTest`, … (see **Slices**) | the layer's skill |
 | One business module of a Spring Modulith app | `@ApplicationModuleTest`; read [modules.md](modules.md) | — |
 | The app wires up and its properties are valid | The `contextLoads()` test from start.spring.io | — |
