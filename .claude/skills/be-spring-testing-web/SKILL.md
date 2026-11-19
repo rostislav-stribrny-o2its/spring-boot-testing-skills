@@ -138,4 +138,4 @@ Modified for this application's Java base — this file has been changed from th
 Source: [Kehrlann/spring-boot-testing-skills](https://github.com/Kehrlann/spring-boot-testing-skills),
 Apache License 2.0 (see `LICENSE.txt`); original content by Daniel Garnier-Moiroux.
 Changes: test classes extend the shared IT base class and use the `*IT` suffix; error statuses per
-ADR-00007 (422/400); slices with the generated controllers; browser-testing references removed.
+ADR-STACK-00004 (422/400); slices with the generated controllers; browser-testing references removed.

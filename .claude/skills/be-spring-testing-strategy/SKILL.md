@@ -8,6 +8,11 @@ description: >
 
 Spring Boot tests sit in the middle of the testing spectrum. They prove that your code works *together with Spring*: annotations, auto-configuration, properties, `@ExceptionHandler` mappings, query method names, security rules. Each one costs seconds of application startup, so pick the cheapest test that still exercises what can break.
 
+**Step 0 — load the application supplement.** Before applying any value marked *example*, list
+`.agents/skills/app-*/SKILL.md` and load every one whose description names this skill. Such a
+supplement (an application skill, name prefix `app-`) carries the application's values and
+overrides this skill on the same point.
+
 ## Steps
 
 1. **Name what can break.** For each behaviour you are about to test, write down the failure you want to catch: a wrong calculation, a wrong HTTP status, a missing bean, a bad property, a forbidden page shown to the wrong user.
@@ -15,7 +20,9 @@ Spring Boot tests sit in the middle of the testing spectrum. They prove that you
 3. **Reuse an existing context.** Before giving a Spring test class its own configuration (properties, profiles, mocks, slices), check what the suite already uses: load `be-spring-testing-fast`.
 4. **Load the skill for the chosen type** and write the tests.
 
-Done when every planned test has a type and a reason drawn from the table.
+Done when every planned test has a type and a reason drawn from the table. The levels and gates the
+tests serve (fast loop, pull-request gate, unit coverage of business logic, negative and boundary
+cases) are set by ADR-STACK-00006.
 
 ## Decision table
 
@@ -27,8 +34,8 @@ Done when every planned test has a type and a reason drawn from the table.
 | Who may call what: URL rules, method security, CSRF | The row above that matches, plus Spring Security test support | `be-spring-testing-security` |
 | `@ConfigurationProperties` binding, validation, app refusing to start on bad config | Validator unit tests, or `SpringApplicationBuilder` | `be-spring-testing-properties` |
 | Custom queries, entity mappings, constraints, migrations, transactional behaviour | Repository tests in the shared `@SpringBootTest`, against the real database engine | `be-spring-testing-persistence` |
-| Outbound HTTP client code (none in phase 1): the requests the app sends, how it maps responses and errors | `MockRestServiceServer`, alone or with `@RestClientTest` | — |
-| Reading a source database (`scheduler-service`) | MS SQL in Testcontainers in the shared base class | `be-testing-conventions` |
+| Outbound HTTP client code (only when the application has an outbound HTTP integration): the requests the app sends, how it maps responses and errors | `MockRestServiceServer`, alone or with `@RestClientTest` | — |
+| Reading a source database (`scheduler-service`) | The source's database engine in Testcontainers in the shared base class (the image matching the application's source; example: MS SQL) | `be-testing-conventions` |
 | One technical layer of a large, slow-starting app, while iterating fast | Test slice: `@WebMvcTest`, `@DataJdbcTest`, `@JdbcTest`, … (see **Slices**) | the layer's skill |
 | One business module of a Spring Modulith app | `@ApplicationModuleTest`; read [modules.md](modules.md) | — |
 | The app wires up and its properties are valid | The `contextLoads()` test from start.spring.io | — |

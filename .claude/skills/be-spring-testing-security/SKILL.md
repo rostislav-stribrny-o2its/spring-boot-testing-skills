@@ -16,6 +16,16 @@ for HTTP tests. OIDC login, opaque tokens and WebFlux are not used by this backe
 The backend is a stateless OAuth2 resource server with Keycloak (`be-oauth2-resource-server`):
 bearer JWTs, no login form, no session, CSRF off. Not yet verified by a build in this repository.
 
+This skill describes the stack default: the access rules of ADR-STACK-00002 point 3 and the negative
+and boundary cases of ADR-STACK-00006 point 5; it applies unless an application ADR says otherwise.
+The person identifier, the entry-ban reasons, the role codes and the test range of person
+identifiers are the application's own decisions and appear here only as marked examples.
+
+**Step 0 — load the application supplement.** Before applying any value marked *example*, list
+`.agents/skills/app-*/SKILL.md` and load every one whose description names this skill. Such a
+supplement (an application skill, name prefix `app-`) carries the application's values and
+overrides this skill on the same point.
+
 ## Two levels
 
 | Level | Suffix | What it proves | Keycloak |
@@ -30,7 +40,10 @@ The fakes **bypass the decoder and the converter**. The matrix is therefore test
 
 API delegates and services read `AppAuthentication.current()`; a plain `jwt()` or `@WithMockUser`
 gives a different type, and that code then fails. Build the caller with the **real converter** and a
-fixed access decision, so the authorities are exactly what production produces:
+fixed access decision, so the authorities are exactly what production produces. Where the
+repository already has `TestAuthentications` (test infrastructure of the template), the
+repository's `TestAuthentications` wins: call its methods with their signatures, never rewrite it
+to match this sketch.
 
 ```java
 public final class TestAuthentications {   // backend-service src/test (the only application with security)
@@ -39,35 +52,36 @@ public final class TestAuthentications {   // backend-service src/test (the only
     private static final AppSecurityProperties PROPS = new AppSecurityProperties(
         "app-frontend", "personal_number", "app-user", "app-api", "/api/users/me");
 
-    public static AppAuthentication as(String personalNumber, AccessDecision decision) {
+    public static AppAuthentication as(String principal, AccessDecision decision) {
         Jwt jwt = Jwt.withTokenValue("test-token").header("alg", "none")
-            .subject("account-" + personalNumber)
-            .claim("personal_number", personalNumber)
+            .subject("account-" + principal)
+            .claim(PROPS.principalClaim(), principal)
             .claim("resource_access", Map.of("app-api", Map.of("roles", List.of("app-user"))))
             .build();
-        return new KeycloakJwtAuthenticationConverter(PROPS, (principal, sub) -> decision).convert(jwt);
+        return new KeycloakJwtAuthenticationConverter(PROPS, (p, sub) -> decision).convert(jwt);
     }
 
-    public static AppAuthentication active(String personalNumber, long personId, String... roleCodes) {
-        return as(personalNumber, new AccessDecision(AccessState.ACTIVE, personId, Set.of(roleCodes)));
+    public static AppAuthentication active(String principal, long personId, String... roleCodes) {
+        return as(principal, new AccessDecision(AccessState.ACTIVE, personId, Set.of(roleCodes)));
     }
 
-    public static AppAuthentication withoutAccess(String personalNumber, AccessState reason) {
+    /** reason = UNPAIRED (no person, personId null), NO_ROLE or an entry-ban reason of the application. */
+    public static AppAuthentication withoutAccess(String principal, AccessState reason) {
         Long personId = reason == AccessState.UNPAIRED ? null : 1L;
-        return as(personalNumber, new AccessDecision(reason, personId, Set.of()));
+        return as(principal, new AccessDecision(reason, personId, Set.of()));
     }
 }
 
-// in a test (personal numbers from the reserved test range, never real ones)
-assertThat(mvc.get().uri("/api/projects/7")
-        .with(authentication(TestAuthentications.active("900001", 42L, Roles.PROJECT_MANAGER))))
+// in a test (principal values from a test range that cannot collide with real identifiers; example: 900001)
+assertThat(mvc.get().uri("/api/orders/7")
+        .with(authentication(TestAuthentications.active("900001", 42L, Roles.USER))))
     .hasStatusOk();
 ```
 
 | Need | Use |
 |---|---|
 | any caller of code that reads `AppAuthentication` | `.with(authentication(TestAuthentications.active(...)))` |
-| unpaired, no role, suspended | `.with(authentication(TestAuthentications.withoutAccess(pn, AccessState.SUSPENDED)))` |
+| unpaired, no role, and each entry-ban reason of the application (example: suspended) | `.with(authentication(TestAuthentications.withoutAccess(principal, AccessState.SUSPENDED)))` (example reason) |
 | a pure URL/role rule, code reads nothing | `.with(jwt().authorities(new SimpleGrantedAuthority("ROLE_ENTRY")))` — authorities exactly as above (`ROLE_ENTRY`, `ROLE_ACTIVE`, `ROLE_<CODE>`) |
 | `@PreAuthorize` on a bean called directly | `@WithMockUser(roles = {"ACTIVE", "APP_ADMIN"})` |
 | no caller | no annotation, no post-processor |
@@ -85,21 +99,22 @@ the general matrix in `be-testing-conventions`, made concrete here: `401` comes 
 gets `403` everywhere; `ACTIVE` without the required business role gets `403`
 `/problems/access-denied`.
 
-**Rows of the application-roles model** (`be-oauth2-resource-server`):
+**Rows of the application-roles model** (pattern (a), ADR-STACK-00002 point 3; `be-oauth2-resource-server`):
 
-- unpaired → `/api/users/me` `403` `application/problem+json`, `type` `/problems/no-access`,
-  `reason: UNPAIRED`; every other endpoint the same `403` with `reason`; an audit record with the account's `sub`;
+- unpaired, no role and each entry-ban reason the application defines → the status endpoint
+  (example: `/api/users/me`) **and any other** endpoint `403` `application/problem+json`, `type`
+  `/problems/no-access`, with that `reason`: `UNPAIRED` for an account no person matches, with an
+  audit record of the account's `sub`, and `NO_ROLE` for a paired person without any role (states of
+  the mechanism, recommended names); one row per entry-ban reason (*example:* `SUSPENDED`);
 - paired and active → `/api/users/me` `200` with identity, roles, `permissions`, `Cache-Control: no-store`;
 - a token with only the entry role → `/api/users/me` is reached (not caught by the `/api/**` rule) —
   guards that `app.security.me-path` equals the contract's path;
-- suspended → `/api/users/me` **and any other** endpoint `403` `/problems/no-access`, `reason: SUSPENDED`;
-- paired without any role → `reason: NO_ROLE`;
-- a ban or a removed role written to the database → effective on the next request (or after the
-  configured cache period, at most 5 minutes), without a new token — tested through `ApplicationAccess`
-  against the database;
+- an entry ban or a removed role written to the database → effective on the next request (or after
+  the configured cache period, at most the access-token lifetime; stack default 5 minutes), without a
+  new token — tested through `ApplicationAccess` against the database;
 - token without the principal claim (example: `personal_number`) → `401`;
-- role administration: changing one's own roles → rejected; an administrator changing another
-  administrator's roles → rejected; every accepted change audited.
+- *example rows of an application with role administration:* changing one's own roles → rejected;
+  an administrator changing another administrator's roles → rejected; every accepted change audited.
 
 ## Unit-testing the converter
 
@@ -110,7 +125,8 @@ role names normalised (example: `app-user` → `APP_USER`); business roles only 
 other than the entry role never become authorities; `noAccessReason()` per state.
 
 `ApplicationAccess` itself is a database read: test it as `*IT` against PostgreSQL (person paired,
-unpaired, suspended, without role; role removed).
+role removed, unpaired, without role, and one case per entry-ban reason of the application;
+example: suspended).
 
 ## Slices: load the real security configuration
 
@@ -143,8 +159,8 @@ Call the bean directly with the security configuration in the context:
 
 ```java
 @Test
-@WithMockUser(roles = {"ACTIVE", "EMPLOYEE"})
-void approve_asEmployee_isDenied() {
+@WithMockUser(roles = {"ACTIVE", "USER"})                 // example role codes from Roles
+void approve_asUser_isDenied() {
     assertThatExceptionOfType(AccessDeniedException.class).isThrownBy(() -> service.approve(7L));
 }
 
@@ -173,31 +189,12 @@ containers started once per JVM, one Spring context, a handful of requests.
 @Tag("keycloak")
 class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-testing-conventions), MockMvc included
 
-    static final Network NETWORK = Network.newNetwork();
-
-    // TestImages holds the references of docker-compose.yml (tag@digest), one place in test code
-    static final KeycloakContainer KEYCLOAK = new KeycloakContainer(TestImages.KEYCLOAK)
-        .withContextPath("/auth").withNetwork(NETWORK).withNetworkAliases("keycloak");
-
-    // the repo realm, applied exactly as docker-compose does (keycloak-config-cli, same image)
-    static final GenericContainer<?> REALM = new GenericContainer<>(TestImages.KEYCLOAK_CONFIG_CLI)
-        .withNetwork(NETWORK)
-        .withCopyFileToContainer(MountableFile.forHostPath(repoPath("keycloak/config")), "/config")
-        .withCopyFileToContainer(MountableFile.forClasspathResource("keycloak/it-client.yaml"), "/it/it-client.yaml")
-        .withEnv(Map.of(
-            "KEYCLOAK_URL", "http://keycloak:8080/auth",
-            "KEYCLOAK_USER", KEYCLOAK.getAdminUsername(),
-            "KEYCLOAK_PASSWORD", KEYCLOAK.getAdminPassword(),
-            "IMPORT_FILES_LOCATIONS", "/config/realm.yaml,/config/development/*.yaml,/it/it-client.yaml",
-            "IMPORT_VARSUBSTITUTION_ENABLED", "true",
-            "KEYCLOAK_REDIRECT_URIS", "http://localhost/*",
-            "APP_ADMIN_EMAIL", "it-admin@example.test",
-            "APP_ADMIN_PASSWORD", "it-only-" + UUID.randomUUID()))   // + every other env lookup the realm still has
-        .withStartupCheckStrategy(new OneShotStartupCheckStrategy().withTimeout(Duration.ofMinutes(3)));
+    // The containers are static fields of the class (backend/backend-service/src/test/java/app/backend/KeycloakSecurityIT.java):
+    // Keycloak from TestImages, the repo realm applied by keycloak-config-cli exactly as docker-compose does.
+    static final KeycloakContainer KEYCLOAK = new KeycloakContainer(TestImages.KEYCLOAK).withContextPath("/auth");
 
     static {
         KEYCLOAK.start();
-        REALM.start();   // runs once, must exit 0
     }
 
     @DynamicPropertySource
@@ -214,7 +211,7 @@ class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-test
 
     @Test
     void me_withRealToken_ofPairedPerson_returns200() {
-        // insert the fictitious person whose personal number the test account carries
+        // insert the fictitious person whose principal (example: personal number) the test account carries
         assertThat(mvc.get().uri("/api/users/me")
                 .header(AUTHORIZATION, "Bearer " + token(TEST_ACCOUNT)))
             .hasStatusOk();
@@ -224,7 +221,7 @@ class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-test
     void me_withoutToken_returns401() { … }
 
     @Test
-    void adminOperation_withEmployeeToken_returns403() { … }
+    void adminOperation_withUserToken_returns403() { … }
 
     @Test
     void me_withTamperedToken_returns401() { … }   // flip one character of the signature
@@ -266,6 +263,8 @@ class KeycloakSecurityIT extends AbstractIT {   // shared IT base class (be-test
 
 ## Gotchas
 
+- Agent applies an example value without loading the `app-` supplement that names this skill — Step 0 first: list `.agents/skills/app-*/SKILL.md`
+- Agent rewrites the repository's `TestAuthentications` to match the sketch above — the repository's `TestAuthentications` wins
 - Agent uses plain `jwt()` for code that reads `AppAuthentication` — `authentication(TestAuthentications…)`
 - Agent invents authorities (`ROLE_USER`, `SCOPE_read`) — use what the converter produces: `ROLE_ENTRY`, `ROLE_ACTIVE`, `ROLE_<CODE>`
 - Agent tests only the happy path — every operation gets its 401, 403 and allowed rows
@@ -284,4 +283,5 @@ distilled from the book *Spring Boot Testing In Action*.
 Changes: callers built with the real converter, access matrix with no-access reasons, slices with the
 library configuration, one Keycloak integration test in Testcontainers; form-login, login-page and
 HTML-escaping sections removed (not used by the base backend).
-Application layer: access-matrix rows for paired accounts, suspension and role administration.
+Access-matrix rows for the entry-ban reasons and for role administration are examples; an
+application supplement skill fixes the rows of its own decisions.
